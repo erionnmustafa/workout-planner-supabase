@@ -12,7 +12,11 @@
     "@react-navigation/bottom-tabs": "^7.8.12",
     "@react-navigation/native": "^7.1.25",
     "@supabase/supabase-js": "^2.87.1",
+    "base64-arraybuffer": "^1.0.2",
     "expo": "~54.0.29",
+    "expo-clipboard": "~8.0.8",
+    "expo-file-system": "~19.0.21",
+    "expo-image-picker": "~17.0.10",
     "expo-linear-gradient": "~15.0.8",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
@@ -20,7 +24,9 @@
     "react-native-gesture-handler": "~2.28.0",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0"
+    "react-native-screens": "~4.16.0",
+    "react-native-url-polyfill": "^3.0.0",
+    "react-native-webview": "^13.16.0"
   },
   "private": true
 }
