@@ -1,48 +1,46 @@
-AI LOG — Workout Planner Mobile App
 
-This project was developed with assistance from AI tools (ChatGPT) to improve:
-- Code structure
-- Feature completeness
-- User experience
-- Debugging and error handling
-- Database design decisions
+---
 
-How AI was used:
+## 5 AI_LOG.txt 
 
-1. **Planning**
-   - Breaking down project requirements into achievable steps
-   - Designing feature roadmap (Auth → Workouts → History → Dashboard)
+```txt
+AI LOG — Workout Planner (Expo + Supabase)
 
-2. **Development Support**
-   - Help with Supabase Auth integration
-   - Guidance on database tables and Row Level Security (RLS)
-   - Assistance with React Native state management
-   - UI/UX suggestions inspired by real fitness apps
+Goal:
+Build a mobile workout planner with authentication as a main criterion and extend it into a full-featured app suitable for presentation: CRUD workouts, media, analytics, achievements, and reminders.
 
-3. **Debugging**
-   - Resolving Expo dependency issues
-   - Fixing authentication edge cases
-   - Handling incorrect user inputs gracefully
+Implemented:
+- Supabase Auth: sign up, sign in, persistent session.
+- Supabase Tables:
+  - profiles (user_id, full_name, avatar_url)
+  - user_settings (goal, level, weekly_target, reminders_enabled, reminder_time, points)
+  - workouts (name, plan jsonb, image_url, video_url, user_id)
+  - workout_completions (user_id, workout_id, completed_at)
+- RLS Policies:
+  - Users can only read/write their own rows for profiles, settings, workouts, completions.
+- Storage:
+  - avatars bucket (public)
+  - workout-images bucket (public)
+- App UX:
+  - Premium UI style (glass cards + gradient background)
+  - Dashboard with analytics and clickable navigation
+  - Workouts with add/edit/delete, image upload, YouTube playback, completion action
+  - Achievements system (client-calculated)
+  - Points (rewards) awarded per completion
+  - Daily reminders via expo-notifications
 
-4. **Feature Enhancement**
-   - Workout history with logs
-   - Achievement system based on user activity
-   - Streak calculation logic
-   - Rest timer logic
-   - Search and filtering logic
+Dependencies added:
+- react-native-url-polyfill
+- expo-notifications
 
-5. **Documentation**
-   - Writing README documentation
-   - Structuring the project for presentation and grading
+Testing notes:
+- Verify buckets exist and are public.
+- Ensure SQL was executed successfully.
+- Use “Complete” button to generate workout_completions.
+- Points should increase by 10 per completion.
+- Streak is computed based on completion days.
+- Weekly progress counts completions since start of the week.
 
-Final Result:
-A fully functional, advanced mobile fitness application with:
-- Authentication
-- Database-backed workouts
-- History tracking
-- Analytics dashboard
-- Achievements
-- Timer functionality
-
-The AI was used as a development assistant, not as an automatic code generator.
-All logic was reviewed and understood during implementation.
+Placement:
+- README.md -> project root
+- AI_LOG.txt -> project root
