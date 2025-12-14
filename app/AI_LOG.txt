@@ -1,0 +1,48 @@
+AI LOG — Workout Planner Mobile App
+
+This project was developed with assistance from AI tools (ChatGPT) to improve:
+- Code structure
+- Feature completeness
+- User experience
+- Debugging and error handling
+- Database design decisions
+
+How AI was used:
+
+1. **Planning**
+   - Breaking down project requirements into achievable steps
+   - Designing feature roadmap (Auth → Workouts → History → Dashboard)
+
+2. **Development Support**
+   - Help with Supabase Auth integration
+   - Guidance on database tables and Row Level Security (RLS)
+   - Assistance with React Native state management
+   - UI/UX suggestions inspired by real fitness apps
+
+3. **Debugging**
+   - Resolving Expo dependency issues
+   - Fixing authentication edge cases
+   - Handling incorrect user inputs gracefully
+
+4. **Feature Enhancement**
+   - Workout history with logs
+   - Achievement system based on user activity
+   - Streak calculation logic
+   - Rest timer logic
+   - Search and filtering logic
+
+5. **Documentation**
+   - Writing README documentation
+   - Structuring the project for presentation and grading
+
+Final Result:
+A fully functional, advanced mobile fitness application with:
+- Authentication
+- Database-backed workouts
+- History tracking
+- Analytics dashboard
+- Achievements
+- Timer functionality
+
+The AI was used as a development assistant, not as an automatic code generator.
+All logic was reviewed and understood during implementation.
