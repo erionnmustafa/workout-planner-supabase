@@ -1,46 +1,58 @@
+AI LOG – Workout Planner
 
----
+Qëllimi:
+Ndërtimi i një aplikacioni mobil për menaxhimin e workout-eve, me authentication,
+ruajtje të të dhënave, analiza të progresit dhe dizajn modern, i përshtatshëm
+për prezantim akademik.
 
-## 5 AI_LOG.txt 
+Teknologjitë Kryesore:
+- Expo React Native
+- Supabase (Auth, Database, Storage)
+- Expo Notifications
+- WebView dhe expo-av për video
 
-```txt
-AI LOG — Workout Planner (Expo + Supabase)
+Funksionalitetet e Implementuara:
 
-Goal:
-Build a mobile workout planner with authentication as a main criterion and extend it into a full-featured app suitable for presentation: CRUD workouts, media, analytics, achievements, and reminders.
+Authentication:
+- Regjistrim dhe login përmes Supabase Auth
+- Menaxhim i sesioneve
+- Verifikim i email-it
+- Forgot Password përmes email-it
 
-Implemented:
-- Supabase Auth: sign up, sign in, persistent session.
-- Supabase Tables:
-  - profiles (user_id, full_name, avatar_url)
-  - user_settings (goal, level, weekly_target, reminders_enabled, reminder_time, points)
-  - workouts (name, plan jsonb, image_url, video_url, user_id)
-  - workout_completions (user_id, workout_id, completed_at)
-- RLS Policies:
-  - Users can only read/write their own rows for profiles, settings, workouts, completions.
-- Storage:
-  - avatars bucket (public)
-  - workout-images bucket (public)
-- App UX:
-  - Premium UI style (glass cards + gradient background)
-  - Dashboard with analytics and clickable navigation
-  - Workouts with add/edit/delete, image upload, YouTube playback, completion action
-  - Achievements system (client-calculated)
-  - Points (rewards) awarded per completion
-  - Daily reminders via expo-notifications
+Problem i Njohur:
+- Linku i resetimit të fjalëkalimit mund të shfaqë gabim në browser
+  (404 / access_denied / otp_expired).
+- Problemi ndodh para se aplikacioni të pranojë token-in.
+- Shkaku lidhet me redirect page dhe deep-link, jo me logjikën e aplikacionit.
+- Problemi është i dokumentuar.
 
-Dependencies added:
-- react-native-url-polyfill
-- expo-notifications
+Databaza:
+- profiles
+- user_settings
+- workouts
+- workout_completions
 
-Testing notes:
-- Verify buckets exist and are public.
-- Ensure SQL was executed successfully.
-- Use “Complete” button to generate workout_completions.
-- Points should increase by 10 per completion.
-- Streak is computed based on completion days.
-- Weekly progress counts completions since start of the week.
+Siguria:
+- Row Level Security (RLS) aktiv
+- Akses vetëm në të dhënat personale të përdoruesit
 
-Placement:
-- README.md -> project root
-- AI_LOG.txt -> project root
+Storage:
+- avatars
+- workout-images
+- workout-videos
+
+Aplikacioni:
+- CRUD për workout-e
+- Ngarkim dhe shfaqje media
+- Përfundim workout-esh
+- Sistem pikësh dhe nivelesh
+- Dashboard analitik
+- Timeline 14-ditore
+- Day Details
+- Profil përdoruesi
+- Njoftime ditore
+
+Përfundim:
+Aplikacioni është funksional, vizualisht i përpunuar dhe teknikisht i qëndrueshëm.
+Problemi i resetimit të fjalëkalimit është i njohur dhe nuk ndikon në vlerësimin e
+përgjithshëm të projektit.

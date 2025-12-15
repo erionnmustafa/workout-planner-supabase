@@ -1,3 +1,4 @@
+// App.js (FULL UPDATED - copy/paste)
 import "react-native-gesture-handler";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -9,33 +10,46 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
   View,
-  Linking,
   ScrollView,
+  Animated,
+  Easing,
+  Dimensions,
 } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { WebView } from "react-native-webview";
 import * as Notifications from "expo-notifications";
+import { Video } from "expo-av";
+import * as Linking from "expo-linking";
 import { supabase } from "./supabaseClient";
 
 const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
 
 const BUCKET_AVATARS = "avatars";
 const BUCKET_WORKOUT_IMAGES = "workout-images";
+const BUCKET_WORKOUT_VIDEOS = "workout-videos";
 const PH = "#111827";
+
+const { width: W } = Dimensions.get("window");
 
 function cacheBust(url) {
   if (!url) return null;
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}t=${Date.now()}`;
+}
+
+function isYouTubeUrl(url) {
+  const u = (url || "").toLowerCase();
+  return u.includes("youtube.com") || u.includes("youtu.be") || u.includes("youtube-nocookie.com");
 }
 
 function ytToEmbed(url) {
@@ -62,22 +76,38 @@ async function pickImageSquare() {
     quality: 0.9,
   });
   if (res.canceled) return null;
-  return res.assets?.[0]?.uri || null;
+  return res.assets?.[0] || null;
 }
 
-async function uploadToBucket(bucket, uri, fileNameInsideUserFolder) {
-  const r = await fetch(uri);
-  const blob = await r.blob();
+async function pickVideo() {
+  const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) {
+    Alert.alert("Permission needed", "Allow video access to upload videos.");
+    return null;
+  }
+  const res = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+    quality: 1,
+    allowsEditing: false,
+  });
+  if (res.canceled) return null;
+  return res.assets?.[0] || null;
+}
+
+async function uploadToBucket(bucket, uri, fileNameInsideUserFolder, contentTypeOverride) {
+  const response = await fetch(uri);
+  const blob = await response.blob();
 
   const { data: authData } = await supabase.auth.getUser();
   const uid = authData?.user?.id;
   if (!uid) throw new Error("No authenticated user. Please login again.");
 
   const finalPath = `${uid}/${fileNameInsideUserFolder}`;
+  const contentType = contentTypeOverride || blob.type || "application/octet-stream";
 
   const { error } = await supabase.storage.from(bucket).upload(finalPath, blob, {
     upsert: true,
-    contentType: "image/jpeg",
+    contentType,
   });
   if (error) throw error;
 
@@ -133,9 +163,214 @@ function dayKey(d) {
   return new Date(d).toDateString();
 }
 
+function dateToYMD(d) {
+  const x = new Date(d);
+  const yyyy = x.getFullYear();
+  const mm = String(x.getMonth() + 1).padStart(2, "0");
+  const dd = String(x.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function ymdToBounds(ymd) {
+  const [y, m, d] = (ymd || "").split("-").map((x) => parseInt(x, 10));
+  const s = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+  const e = new Date(s);
+  e.setDate(e.getDate() + 1);
+  return { startISO: s.toISOString(), endISO: e.toISOString(), startLocal: s, endLocal: e };
+}
+
+/** =======================
+ *  NEW: more “alive” decor
+ *  ======================= */
+function NewYearDecor() {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(a, {
+        toValue: 1,
+        duration: 4200,
+        easing: Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      })
+    ).start();
+  }, []);
+
+  const t1 = a.interpolate({ inputRange: [0, 1], outputRange: [0, 10] });
+  const t2 = a.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
+  const s1 = a.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+      <Animated.View style={[styles.nyOrb1, { transform: [{ translateY: t1 }, { scale: s1 }] }]} />
+      <Animated.View style={[styles.nyOrb2, { transform: [{ translateY: t2 }, { scale: s1 }] }]} />
+      <Animated.View style={[styles.nyOrb3, { transform: [{ translateY: t1 }] }]} />
+      <View style={styles.nySparkRow}>
+        <Ionicons name="sparkles" size={18} color="rgba(236,72,153,0.55)" />
+        <Ionicons name="snow" size={18} color="rgba(34,211,238,0.55)" />
+        <Ionicons name="sparkles" size={18} color="rgba(34,211,238,0.35)" />
+      </View>
+    </View>
+  );
+}
+
+/** =======================
+ *  NEW: UI helpers
+ *  ======================= */
+function xpFromPoints(points) {
+  const p = Number.isFinite(points) ? points : 0;
+  const level = Math.floor(p / 100) + 1;
+  const inLevel = p % 100;
+  const pct = Math.max(0, Math.min(1, inLevel / 100));
+  return { level, inLevel, pct, nextAt: level * 100 };
+}
+
+function ProgressBar({ pct }) {
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: Math.max(0, Math.min(1, pct || 0)),
+      duration: 650,
+      useNativeDriver: false,
+    }).start();
+  }, [pct]);
+
+  const w = anim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
+
+  return (
+    <View style={styles.pbOuter}>
+      <Animated.View style={[styles.pbInner, { width: w }]} />
+    </View>
+  );
+}
+
+function Chip({ icon, label, onPress, subtle }) {
+  return (
+    <Pressable style={[styles.chip, subtle && styles.chipSubtle]} onPress={onPress}>
+      {icon ? <Ionicons name={icon} size={16} color={subtle ? "#E2E8F0" : "#0B1220"} /> : null}
+      <Text style={[styles.chipText, subtle && { color: "#E2E8F0" }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** =======================
+ *  Verify email screen
+ *  ======================= */
+function VerifyEmailScreen({ email }) {
+  const [busy, setBusy] = useState(false);
+
+  const resend = async () => {
+    try {
+      setBusy(true);
+      const { error } = await supabase.auth.resend({ type: "signup", email });
+      if (error) Alert.alert("Resend failed", error.message);
+      else Alert.alert("Sent", "Verification email sent. Check inbox/spam.");
+    } catch (e) {
+      Alert.alert("Resend failed", e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refresh = async () => {
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (error) return Alert.alert("Refresh failed", error.message);
+      const confirmed = !!(data?.user?.email_confirmed_at || data?.user?.confirmed_at);
+      if (!confirmed) Alert.alert("Not verified yet", "Verify your email, then tap Refresh again.");
+      else Alert.alert("Verified ✅", "You can continue now.");
+    } catch (e) {
+      Alert.alert("Refresh failed", e?.message || String(e));
+    }
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  return (
+    <View style={styles.screen}>
+      <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+      <NewYearDecor />
+      <View style={[styles.page, { justifyContent: "center" }]}>
+        <View style={styles.glassCardDark}>
+          <View style={{ alignItems: "center", marginBottom: 10 }}>
+            <View style={styles.brandIcon}>
+              <Ionicons name="mail-unread" size={18} color="#0B1220" />
+            </View>
+            <Text style={[styles.bigTitle, { fontSize: 22, marginTop: 10 }]}>Verify your email</Text>
+            <Text style={[styles.subTitle, { marginBottom: 0 }]}>
+              We sent a verification link to{"\n"}
+              <Text style={{ color: "#E2E8F0", fontWeight: "900" }}>{email}</Text>
+            </Text>
+          </View>
+
+          <Pressable style={[styles.primaryBtn, busy && { opacity: 0.7 }]} onPress={resend} disabled={busy}>
+            <Text style={styles.primaryBtnText}>{busy ? "Sending..." : "Resend verification email"}</Text>
+            <Ionicons name="send-outline" size={16} color="#0B1220" />
+          </Pressable>
+
+          <Pressable style={styles.toolBtnWide} onPress={refresh}>
+            <Ionicons name="refresh-outline" size={18} color="#0B1220" />
+            <Text style={styles.toolText}>Refresh</Text>
+          </Pressable>
+
+          <Pressable style={styles.logoutBtn} onPress={logout}>
+            <Text style={styles.logoutText}>Logout</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function parseRecoveryFromUrl(url) {
+  if (!url) return null;
+
+  const hashIndex = url.indexOf("#");
+  const queryIndex = url.indexOf("?");
+
+  const fragment = hashIndex >= 0 ? url.slice(hashIndex + 1) : "";
+  const query = queryIndex >= 0 ? url.slice(queryIndex + 1, hashIndex >= 0 ? hashIndex : undefined) : "";
+
+  const hashParams = new URLSearchParams(fragment);
+  const queryParams = new URLSearchParams(query);
+
+  const access_token = hashParams.get("access_token") || queryParams.get("access_token");
+  const refresh_token = hashParams.get("refresh_token") || queryParams.get("refresh_token");
+  const type = hashParams.get("type") || queryParams.get("type");
+
+  if (!access_token || type !== "recovery") return null;
+  return { access_token, refresh_token };
+}
+
+/** =======================
+ *  App
+ *  ======================= */
 export default function App() {
   const [session, setSession] = useState(null);
   const [loadingSession, setLoadingSession] = useState(true);
+
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [newPass, setNewPass] = useState("");
+  const [newPass2, setNewPass2] = useState("");
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+
+  const handleUrl = async (url) => {
+    const rec = parseRecoveryFromUrl(url);
+    if (!rec) return;
+
+    try {
+      await supabase.auth.setSession({
+        access_token: rec.access_token,
+        refresh_token: rec.refresh_token || "",
+      });
+      setRecoveryOpen(true);
+    } catch (e) {
+      Alert.alert("Reset failed", e?.message || String(e));
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -144,18 +379,94 @@ export default function App() {
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
+
+    (async () => {
+      const initial = await Linking.getInitialURL();
+      if (initial) await handleUrl(initial);
+    })();
+
+    const listener = Linking.addEventListener("url", ({ url }) => {
+      handleUrl(url);
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+      listener.remove();
+    };
   }, []);
+
+  const confirmReset = async () => {
+    const p1 = (newPass || "").trim();
+    const p2 = (newPass2 || "").trim();
+    if (!p1 || !p2) return Alert.alert("Missing", "Enter the new password twice.");
+    if (p1.length < 6) return Alert.alert("Too short", "Password must be at least 6 characters.");
+    if (p1 !== p2) return Alert.alert("Mismatch", "Passwords do not match.");
+
+    try {
+      setRecoveryBusy(true);
+      const { error } = await supabase.auth.updateUser({ password: p1 });
+      if (error) return Alert.alert("Reset failed", error.message);
+
+      Alert.alert("Done ✅", "Password updated. Now log in with the new password.");
+      setRecoveryOpen(false);
+      setNewPass("");
+      setNewPass2("");
+      await supabase.auth.signOut();
+    } catch (e) {
+      Alert.alert("Reset failed", e?.message || String(e));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
 
   if (loadingSession) {
     return (
-      <SafeAreaView style={styles.center}>
+      <View style={styles.center}>
         <ActivityIndicator size="large" />
-      </SafeAreaView>
+      </View>
+    );
+  }
+
+  if (recoveryOpen) {
+    return (
+      <View style={styles.screen}>
+        <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+        <NewYearDecor />
+        <View style={[styles.page, { justifyContent: "center" }]}>
+          <View style={styles.glassCardDark}>
+            <Text style={styles.cardTitle}>Set new password</Text>
+
+            <TextInput
+              placeholder="New password"
+              placeholderTextColor={PH}
+              style={styles.input}
+              secureTextEntry
+              value={newPass}
+              onChangeText={setNewPass}
+            />
+            <TextInput
+              placeholder="Repeat new password"
+              placeholderTextColor={PH}
+              style={styles.input}
+              secureTextEntry
+              value={newPass2}
+              onChangeText={setNewPass2}
+            />
+
+            <Pressable style={[styles.primaryBtn, recoveryBusy && { opacity: 0.7 }]} onPress={confirmReset} disabled={recoveryBusy}>
+              <Text style={styles.primaryBtnText}>{recoveryBusy ? "Updating..." : "Update password"}</Text>
+              <Ionicons name="checkmark-outline" size={16} color="#0B1220" />
+            </Pressable>
+          </View>
+        </View>
+      </View>
     );
   }
 
   if (!session) return <AuthScreen />;
+
+  const confirmed = !!(session?.user?.email_confirmed_at || session?.user?.confirmed_at);
+  if (!confirmed) return <VerifyEmailScreen email={session.user.email} />;
 
   return (
     <NavigationContainer>
@@ -170,21 +481,29 @@ export default function App() {
               Workouts: focused ? "barbell" : "barbell-outline",
               Profile: focused ? "person" : "person-outline",
             };
-            return (
-              <Ionicons
-                name={map[route.name]}
-                size={size}
-                color={focused ? "#E2E8F0" : "#94A3B8"}
-              />
-            );
+            return <Ionicons name={map[route.name]} size={size} color={focused ? "#E2E8F0" : "#94A3B8"} />;
           },
         })}
       >
-        <Tab.Screen name="Dashboard">{(p) => <DashboardScreen {...p} session={session} />}</Tab.Screen>
+        {/* Dashboard is a Stack: DashboardHome -> DayDetails */}
+        <Tab.Screen name="Dashboard">{() => <DashboardStack session={session} />}</Tab.Screen>
+
         <Tab.Screen name="Workouts">{(p) => <WorkoutsScreen {...p} session={session} />}</Tab.Screen>
         <Tab.Screen name="Profile">{(p) => <ProfileScreen {...p} session={session} />}</Tab.Screen>
       </Tab.Navigator>
     </NavigationContainer>
+  );
+}
+
+/** =======================
+ *  Dashboard stack
+ *  ======================= */
+function DashboardStack({ session }) {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="DashboardHome">{(p) => <DashboardScreen {...p} session={session} />}</Stack.Screen>
+      <Stack.Screen name="DayDetails">{(p) => <DayDetailsScreen {...p} session={session} />}</Stack.Screen>
+    </Stack.Navigator>
   );
 }
 
@@ -193,6 +512,10 @@ function AuthScreen() {
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const [fpOpen, setFpOpen] = useState(false);
+  const [fpEmail, setFpEmail] = useState("");
+  const [fpBusy, setFpBusy] = useState(false);
 
   const submit = async () => {
     const e = email.trim();
@@ -212,7 +535,7 @@ function AuthScreen() {
       const { error } = await supabase.auth.signUp({ email: e, password: p });
       if (error) Alert.alert("Register failed", prettyAuthError(error));
       else {
-        Alert.alert("Account created", "Now login with your account.");
+        Alert.alert("Account created", "Check your email to verify your account, then login.");
         setMode("login");
       }
     }
@@ -220,9 +543,34 @@ function AuthScreen() {
     setBusy(false);
   };
 
+  const sendReset = async () => {
+    const e = (fpEmail || "").trim();
+    if (!e) return Alert.alert("Missing", "Enter your email.");
+
+    try {
+      setFpBusy(true);
+
+      const redirectTo = "https://erionmustafa.github.io/workout-planner-reset/reset-password.html";
+      const { error } = await supabase.auth.resetPasswordForEmail(e, { redirectTo });
+
+      if (error) Alert.alert("Reset failed", error.message);
+      else {
+        Alert.alert("Email sent", "Open the email link, set new password, then log in.");
+        setFpOpen(false);
+        setFpEmail("");
+      }
+    } catch (err) {
+      Alert.alert("Reset failed", err?.message || String(err));
+    } finally {
+      setFpBusy(false);
+    }
+  };
+
   return (
-    <SafeAreaView style={styles.screen}>
+    <View style={styles.screen}>
       <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+      <NewYearDecor />
+
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={styles.authWrap}>
           <View style={styles.brandRow}>
@@ -261,16 +609,204 @@ function AuthScreen() {
               <Ionicons name="arrow-forward" size={16} color="#0B1220" />
             </Pressable>
 
+            {mode === "login" && (
+              <Pressable
+                onPress={() => {
+                  setFpEmail(email.trim());
+                  setFpOpen(true);
+                }}
+              >
+                <Text style={styles.linkCenter}>Forgot password?</Text>
+              </Pressable>
+            )}
+
             <Pressable onPress={() => setMode(mode === "login" ? "register" : "login")}>
               <Text style={styles.linkCenter}>{mode === "login" ? "No account? Register" : "Already have an account? Login"}</Text>
             </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+
+      <Modal visible={fpOpen} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Reset password</Text>
+              <Pressable style={styles.modalClose} onPress={() => setFpOpen(false)}>
+                <Ionicons name="close" size={18} color="#0B1220" />
+              </Pressable>
+            </View>
+
+            <Text style={styles.modalText}>We’ll send a reset link to your email.</Text>
+
+            <TextInput
+              placeholder="Email"
+              placeholderTextColor={PH}
+              style={styles.input}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              value={fpEmail}
+              onChangeText={setFpEmail}
+            />
+
+            <Pressable style={[styles.primaryBtn, fpBusy && { opacity: 0.7 }]} onPress={sendReset} disabled={fpBusy}>
+              <Text style={styles.primaryBtnText}>{fpBusy ? "Sending..." : "Send reset email"}</Text>
+              <Ionicons name="send-outline" size={16} color="#0B1220" />
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
+/** =======================
+ *  Day details screen
+ *  ======================= */
+function DayDetailsScreen({ route, session, navigation }) {
+  const user = session.user;
+  const ymd = route?.params?.ymd || dateToYMD(new Date());
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState([]);
+  const [workoutsMap, setWorkoutsMap] = useState({});
+
+  const load = async () => {
+    setLoading(true);
+
+    const { startISO, endISO } = ymdToBounds(ymd);
+
+    const { data: comps, error } = await supabase
+      .from("workout_completions")
+      .select("id, workout_id, completed_at")
+      .eq("user_id", user.id)
+      .gte("completed_at", startISO)
+      .lt("completed_at", endISO)
+      .order("completed_at", { ascending: false });
+
+    if (error) {
+      setLoading(false);
+      return Alert.alert("Load failed", error.message);
+    }
+
+    const list = comps || [];
+    setRows(list);
+
+    const ids = [...new Set(list.map((x) => x.workout_id).filter(Boolean))];
+    if (ids.length) {
+      const { data: ws } = await supabase
+        .from("workouts")
+        .select("id, name, image_url, video_url, plan")
+        .eq("user_id", user.id)
+        .in("id", ids);
+
+      const map = {};
+      (ws || []).forEach((w) => (map[w.id] = w));
+      setWorkoutsMap(map);
+    } else {
+      setWorkoutsMap({});
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+  }, [ymd]);
+
+  const label = useMemo(() => {
+    const d = new Date(ymd + "T00:00:00");
+    return d.toDateString();
+  }, [ymd]);
+
+  const goWorkouts = () => {
+    // DayDetails is inside Dashboard stack, parent is Tab navigator:
+    navigation.getParent()?.navigate("Workouts");
+  };
+
+  return (
+    <View style={styles.screen}>
+      <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+      <NewYearDecor />
+
+      <View style={[styles.page, { paddingTop: 12 }]}>
+        <View style={styles.dayHeader}>
+          <Pressable style={styles.iconBtnDark} onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={18} color="#E2E8F0" />
+          </Pressable>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hiDark}>Day Details</Text>
+            <Text style={styles.smallDark}>{label}</Text>
+          </View>
+
+          <Pressable style={styles.iconBtnDark} onPress={load}>
+            <Ionicons name="refresh-outline" size={18} color="#E2E8F0" />
+          </Pressable>
+        </View>
+
+        <View style={styles.sectionCardDark}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.sectionTitle}>Completions</Text>
+            <Text style={styles.smallDark}>{loading ? "..." : String(rows.length)}</Text>
+          </View>
+
+          {loading ? (
+            <View style={styles.centerGrow}>
+              <ActivityIndicator />
+            </View>
+          ) : rows.length === 0 ? (
+            <View style={{ paddingVertical: 8 }}>
+              <Text style={[styles.smallDark, { fontWeight: "900" }]}>No completions for this day.</Text>
+              <Text style={styles.miniHelp}>Complete a workout and it will appear here.</Text>
+            </View>
+          ) : (
+            rows.map((r) => {
+              const w = workoutsMap[r.workout_id];
+              const time = new Date(r.completed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+              return (
+                <View key={r.id} style={styles.dayRow}>
+                  <View style={styles.dayRowLeft}>
+                    <View style={styles.dayDot} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.dayTitle}>{w?.name || "Workout"}</Text>
+                      <Text style={styles.daySub}>{`${time} • +10 points`}</Text>
+                    </View>
+                  </View>
+
+                  <Pressable style={styles.dayOpenBtn} onPress={goWorkouts}>
+                    <Ionicons name="barbell-outline" size={16} color="#0B1220" />
+                    <Text style={styles.dayOpenText}>Go</Text>
+                  </Pressable>
+                </View>
+              );
+            })
+          )}
+
+          <Pressable style={[styles.primaryBtn, { marginTop: 10 }]} onPress={goWorkouts}>
+            <Text style={styles.primaryBtnText}>Go to workouts</Text>
+            <Ionicons name="arrow-forward" size={16} color="#0B1220" />
+          </Pressable>
+        </View>
+
+        <View style={styles.sectionCardDark}>
+          <Text style={styles.sectionTitle}>Mini Insight</Text>
+          <Text style={styles.miniHelp}>
+            Consistency beats motivation. Your timeline is clickable — use it to track your best days and repeat them.
+          </Text>
+
+          <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+            <Chip icon="flame-outline" label="Build streak" subtle onPress={() => {}} />
+            <Chip icon="trophy-outline" label="Chase XP" subtle onPress={() => {}} />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** =======================
+ *  Dashboard
+ *  ======================= */
 function DashboardScreen({ session, navigation }) {
   const user = session.user;
 
@@ -291,6 +827,8 @@ function DashboardScreen({ session, navigation }) {
   const [reminderTime, setReminderTime] = useState("19:00");
 
   const [savingSettings, setSavingSettings] = useState(false);
+
+  const [completionsRows, setCompletionsRows] = useState([]);
 
   const achievements = useMemo(() => {
     const a = [];
@@ -351,20 +889,17 @@ function DashboardScreen({ session, navigation }) {
     setReminderTime(rt);
     setPoints(pts);
 
-    const { data: w } = await supabase
-      .from("workouts")
-      .select("id")
-      .eq("user_id", user.id);
-
+    const { data: w } = await supabase.from("workouts").select("id").eq("user_id", user.id);
     setTotalWorkouts((w || []).length);
 
     const { data: c } = await supabase
       .from("workout_completions")
-      .select("id, completed_at")
+      .select("id, completed_at, workout_id")
       .eq("user_id", user.id)
       .order("completed_at", { ascending: false });
 
     const comps = c || [];
+    setCompletionsRows(comps);
     setCompletionsTotal(comps.length);
 
     const sow = startOfWeek(new Date());
@@ -417,23 +952,57 @@ function DashboardScreen({ session, navigation }) {
     Alert.alert("Saved", "Dashboard settings updated.");
   };
 
+  const xp = useMemo(() => xpFromPoints(points), [points]);
+
+  const timeline = useMemo(() => {
+    const map = {};
+    (completionsRows || []).forEach((r) => {
+      const k = dateToYMD(r.completed_at);
+      map[k] = (map[k] || 0) + 1;
+    });
+
+    const arr = [];
+    const today = new Date();
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const ymd = dateToYMD(d);
+      arr.push({
+        ymd,
+        label: d.toLocaleDateString([], { month: "short", day: "2-digit" }),
+        dow: d.toLocaleDateString([], { weekday: "short" }),
+        count: map[ymd] || 0,
+        isToday: ymd === dateToYMD(today),
+      });
+    }
+    return arr;
+  }, [completionsRows]);
+
+  const openDay = (ymd) => {
+    navigation.navigate("DayDetails", { ymd });
+  };
+
+  const todayYMD = dateToYMD(new Date());
+
   return (
-    <SafeAreaView style={styles.screen}>
+    <View style={styles.screen}>
       <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+      <NewYearDecor />
+
       <ScrollView contentContainerStyle={{ paddingBottom: 110 }}>
         <View style={styles.page}>
           <View style={styles.topRow}>
             <View style={styles.profileMini}>
               <View style={styles.avatarMini}>
-                {avatar ? (
-                  <Image source={{ uri: cacheBust(avatar) }} style={styles.avatarImg} />
-                ) : (
-                  <Ionicons name="person" size={16} color="#E2E8F0" />
-                )}
+                {avatar ? <Image source={{ uri: cacheBust(avatar) }} style={styles.avatarImg} /> : <Ionicons name="person" size={16} color="#E2E8F0" />}
               </View>
               <View>
-                <Text style={styles.hiDark}>Welcome{fullName ? `, ${fullName}` : ""}</Text>
-                <Text style={styles.smallDark} numberOfLines={1}>{user.email}</Text>
+                <Text style={styles.hiDark}>
+                  Welcome{fullName ? `, ${fullName}` : ""}
+                </Text>
+                <Text style={styles.smallDark} numberOfLines={1}>
+                  {user.email}
+                </Text>
               </View>
             </View>
 
@@ -443,23 +1012,90 @@ function DashboardScreen({ session, navigation }) {
           </View>
 
           <View style={styles.heroPanelDark}>
-            <Text style={styles.heroTitleDark}>Dashboard</Text>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <Text style={styles.heroTitleDark}>DASHBOARD</Text>
+              <View style={styles.badgePill}>
+                <Ionicons name="flash-outline" size={14} color="#0B1220" />
+                <Text style={styles.badgeText}>LVL {xp.level}</Text>
+              </View>
+            </View>
+
             <Text style={styles.heroQuoteDark}>Plan. Execute. Repeat.</Text>
 
+            <View style={{ marginTop: 12 }}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.smallDark}>XP Progress</Text>
+                <Text style={styles.smallDark}>{xp.inLevel}/100</Text>
+              </View>
+              <ProgressBar pct={xp.pct} />
+            </View>
+
             <View style={styles.heroActions}>
-              <Pressable style={styles.neonChip} onPress={() => navigation.navigate("Workouts")}>
+              <Pressable style={styles.neonChip} onPress={() => navigation.getParent()?.navigate("Workouts")}>
                 <Ionicons name="barbell-outline" size={18} color="#0B1220" />
                 <Text style={styles.neonChipText}>Open workouts</Text>
               </Pressable>
-              <Pressable style={styles.neonChip} onPress={() => navigation.navigate("Profile")}>
+
+              <Pressable style={styles.neonChip} onPress={() => navigation.getParent()?.navigate("Profile")}>
                 <Ionicons name="person-outline" size={18} color="#0B1220" />
                 <Text style={styles.neonChipText}>Edit profile</Text>
               </Pressable>
             </View>
+
+            <View style={styles.todayCard}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={styles.todayIcon}>
+                  <Ionicons name="calendar-outline" size={18} color="#0B1220" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.todayTitle}>Today</Text>
+                  <Text style={styles.todaySub}>Tap the timeline dates below to open a day view.</Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                <Chip
+                  icon="time-outline"
+                  label={`Open ${new Date().toLocaleDateString([], { month: "short", day: "2-digit" })}`}
+                  onPress={() => openDay(todayYMD)}
+                />
+                <Chip
+                  icon="sparkles-outline"
+                  label="Boost motivation"
+                  subtle
+                  onPress={() => Alert.alert("🔥", "Small step now = big result later. Go get it.")}
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.sectionCardDark}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.sectionTitle}>Timeline</Text>
+              <Text style={styles.smallDark}>Last 14 days</Text>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 6, gap: 10 }}>
+              {timeline.map((t) => (
+                <Pressable
+                  key={t.ymd}
+                  style={[styles.dayChip, t.isToday && styles.dayChipToday, t.count > 0 && styles.dayChipDone]}
+                  onPress={() => openDay(t.ymd)}
+                >
+                  <Text style={[styles.dayChipDow, t.isToday && { color: "#0B1220" }]}>{t.dow}</Text>
+                  <Text style={[styles.dayChipLabel, t.isToday && { color: "#0B1220" }]}>{t.label}</Text>
+                  <View style={[styles.dayChipCount, t.count > 0 ? styles.dayChipCountOn : styles.dayChipCountOff]}>
+                    <Text style={styles.dayChipCountText}>{t.count}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <Text style={styles.miniHelp}>Click any date → opens “Day Details” with completions + timeline view.</Text>
           </View>
 
           <View style={styles.statsGrid}>
-            <Pressable style={styles.statBoxDark} onPress={() => navigation.navigate("Workouts")}>
+            <Pressable style={styles.statBoxDark} onPress={() => navigation.getParent()?.navigate("Workouts")}>
               <View style={styles.statTop}>
                 <Text style={styles.statLabelDark}>Total workouts</Text>
                 <Ionicons name="barbell-outline" size={18} color="#E2E8F0" />
@@ -468,14 +1104,14 @@ function DashboardScreen({ session, navigation }) {
               <Text style={styles.tapHint}>Tap to view</Text>
             </Pressable>
 
-            <View style={styles.statBoxDark}>
+            <Pressable style={styles.statBoxDark} onPress={() => openDay(todayYMD)}>
               <View style={styles.statTop}>
                 <Text style={styles.statLabelDark}>Completions</Text>
                 <Ionicons name="checkmark-circle-outline" size={18} color="#E2E8F0" />
               </View>
               <Text style={styles.statValueDark}>{loading ? "..." : String(completionsTotal)}</Text>
-              <Text style={styles.tapHint}>All time</Text>
-            </View>
+              <Text style={styles.tapHint}>Tap → Today details</Text>
+            </Pressable>
 
             <View style={styles.statBoxDark}>
               <View style={styles.statTop}>
@@ -517,20 +1153,8 @@ function DashboardScreen({ session, navigation }) {
           <View style={styles.sectionCardDark}>
             <Text style={styles.sectionTitle}>Settings</Text>
 
-            <TextInput
-              value={goal}
-              onChangeText={setGoal}
-              placeholder="Goal (e.g. Bulk / Cut / Strength)"
-              placeholderTextColor={PH}
-              style={styles.inputDark}
-            />
-            <TextInput
-              value={level}
-              onChangeText={setLevel}
-              placeholder="Level (Beginner / Intermediate / Advanced)"
-              placeholderTextColor={PH}
-              style={styles.inputDark}
-            />
+            <TextInput value={goal} onChangeText={setGoal} placeholder="Goal (e.g. Bulk / Cut / Strength)" placeholderTextColor={PH} style={styles.inputDark} />
+            <TextInput value={level} onChangeText={setLevel} placeholder="Level (Beginner / Intermediate / Advanced)" placeholderTextColor={PH} style={styles.inputDark} />
             <TextInput
               value={String(weeklyTarget)}
               onChangeText={(t) => setWeeklyTarget(t.replace(/[^\d]/g, ""))}
@@ -553,13 +1177,7 @@ function DashboardScreen({ session, navigation }) {
               </Pressable>
             </View>
 
-            <TextInput
-              value={reminderTime}
-              onChangeText={setReminderTime}
-              placeholder="Reminder time HH:MM (e.g. 19:00)"
-              placeholderTextColor={PH}
-              style={styles.inputDark}
-            />
+            <TextInput value={reminderTime} onChangeText={setReminderTime} placeholder="Reminder time HH:MM (e.g. 19:00)" placeholderTextColor={PH} style={styles.inputDark} />
 
             <Pressable style={[styles.primaryBtn, savingSettings && { opacity: 0.7 }]} onPress={saveSettings} disabled={savingSettings}>
               <Text style={styles.primaryBtnText}>{savingSettings ? "Saving..." : "Save settings"}</Text>
@@ -570,7 +1188,9 @@ function DashboardScreen({ session, navigation }) {
           <View style={styles.sectionCardDark}>
             <View style={styles.rowBetween}>
               <Text style={styles.sectionTitle}>Achievements</Text>
-              <Text style={styles.smallDark}>{earnedCount}/{achievements.length}</Text>
+              <Text style={styles.smallDark}>
+                {earnedCount}/{achievements.length}
+              </Text>
             </View>
 
             {achievements.map((a) => (
@@ -585,10 +1205,13 @@ function DashboardScreen({ session, navigation }) {
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
+/** =======================
+ *  Workouts
+ *  ======================= */
 function WorkoutsScreen({ session }) {
   const user = session.user;
 
@@ -603,19 +1226,17 @@ function WorkoutsScreen({ session }) {
   const [videoUrl, setVideoUrl] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [uploadingVideo, setUploadingVideo] = useState(false);
 
   const [playerOpen, setPlayerOpen] = useState(false);
   const [playerUrl, setPlayerUrl] = useState(null);
+  const [playerType, setPlayerType] = useState("youtube");
 
   const plan = useMemo(() => planText.split("\n").map((l) => l.trim()).filter(Boolean), [planText]);
 
   const load = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("workouts")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("workouts").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
     if (error) Alert.alert("Load failed", error.message);
     setItems(data || []);
     setLoading(false);
@@ -644,17 +1265,45 @@ function WorkoutsScreen({ session }) {
   };
 
   const uploadWorkoutPhoto = async () => {
-    const uri = await pickImageSquare();
-    if (!uri) return;
+    const asset = await pickImageSquare();
+    if (!asset?.uri) return;
 
     try {
       setUploading(true);
-      const { publicUrl } = await uploadToBucket(BUCKET_WORKOUT_IMAGES, uri, `${Date.now()}.jpg`);
+
+      const ext = (asset.uri.split(".").pop() || "jpg").toLowerCase();
+      const fileName = `${Date.now()}.${ext}`;
+
+      const contentType = asset?.mimeType || (ext === "png" ? "image/png" : ext === "heic" ? "image/heic" : "image/jpeg");
+
+      const { publicUrl } = await uploadToBucket(BUCKET_WORKOUT_IMAGES, asset.uri, fileName, contentType);
       setImageUrl(publicUrl);
     } catch (e) {
       Alert.alert("Upload failed", e?.message || String(e));
     } finally {
       setUploading(false);
+    }
+  };
+
+  const uploadWorkoutVideo = async () => {
+    const asset = await pickVideo();
+    if (!asset?.uri) return;
+
+    try {
+      setUploadingVideo(true);
+
+      const ext = (asset.uri.split(".").pop() || "mp4").toLowerCase();
+      const fileName = `${Date.now()}.${ext}`;
+
+      const contentType = asset?.mimeType || (ext === "mov" ? "video/quicktime" : "video/mp4");
+
+      const { publicUrl } = await uploadToBucket(BUCKET_WORKOUT_VIDEOS, asset.uri, fileName, contentType);
+      setVideoUrl(publicUrl);
+      Alert.alert("Uploaded ✅", "Video uploaded. It will play directly in the app.");
+    } catch (e) {
+      Alert.alert("Video upload failed", e?.message || String(e));
+    } finally {
+      setUploadingVideo(false);
     }
   };
 
@@ -699,19 +1348,24 @@ function WorkoutsScreen({ session }) {
   };
 
   const play = (url) => {
-    const embed = ytToEmbed(url);
-    if (!embed) return Alert.alert("Invalid link", "Paste a valid YouTube URL.");
-    setPlayerUrl(embed);
+    if (!url) return Alert.alert("No video", "This workout has no video.");
+
+    if (isYouTubeUrl(url)) {
+      const embed = ytToEmbed(url);
+      if (!embed) return Alert.alert("Invalid link", "Paste a valid YouTube URL.");
+      setPlayerType("youtube");
+      setPlayerUrl(embed);
+      setPlayerOpen(true);
+      return;
+    }
+
+    setPlayerType("direct");
+    setPlayerUrl(url);
     setPlayerOpen(true);
   };
 
   const awardPoints = async (add) => {
-    const { data: setg } = await supabase
-      .from("user_settings")
-      .select("points")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
+    const { data: setg } = await supabase.from("user_settings").select("points").eq("user_id", user.id).maybeSingle();
     const current = Number.isFinite(setg?.points) ? setg.points : 0;
     const next = current + add;
 
@@ -736,8 +1390,9 @@ function WorkoutsScreen({ session }) {
   };
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <View style={styles.screen}>
       <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+      <NewYearDecor />
       <View style={styles.page}>
         <View style={styles.topRow}>
           <View>
@@ -750,7 +1405,9 @@ function WorkoutsScreen({ session }) {
         </View>
 
         {loading ? (
-          <View style={styles.centerGrow}><ActivityIndicator /></View>
+          <View style={styles.centerGrow}>
+            <ActivityIndicator />
+          </View>
         ) : (
           <FlatList
             data={items}
@@ -778,8 +1435,12 @@ function WorkoutsScreen({ session }) {
                   )}
 
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.workoutTitleDark} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.smallDark} numberOfLines={2}>{(item.plan || []).join(" • ")}</Text>
+                    <Text style={styles.workoutTitleDark} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={styles.smallDark} numberOfLines={2}>
+                      {(item.plan || []).join(" • ")}
+                    </Text>
 
                     <View style={styles.actionsRow}>
                       <Pressable
@@ -815,8 +1476,9 @@ function WorkoutsScreen({ session }) {
       </View>
 
       <Modal visible={editorOpen} animationType="slide">
-        <SafeAreaView style={styles.screen}>
+        <View style={styles.screen}>
           <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
+          <NewYearDecor />
           <View style={styles.page}>
             <View style={styles.editorHeader}>
               <Pressable style={styles.iconBtnDark} onPress={() => setEditorOpen(false)}>
@@ -836,7 +1498,20 @@ function WorkoutsScreen({ session }) {
                 multiline
                 style={[styles.inputDark, { height: 140, textAlignVertical: "top" }]}
               />
-              <TextInput value={videoUrl} onChangeText={setVideoUrl} placeholder="YouTube URL (optional)" placeholderTextColor={PH} autoCapitalize="none" style={styles.inputDark} />
+
+              <TextInput
+                value={videoUrl}
+                onChangeText={setVideoUrl}
+                placeholder="YouTube URL or Direct video URL (optional)"
+                placeholderTextColor={PH}
+                autoCapitalize="none"
+                style={styles.inputDark}
+              />
+
+              <Pressable style={[styles.neonBtn, uploadingVideo && { opacity: 0.7 }]} onPress={uploadWorkoutVideo} disabled={uploadingVideo}>
+                <Ionicons name="videocam-outline" size={18} color="#0B1220" />
+                <Text style={styles.neonBtnText}>{uploadingVideo ? "Uploading..." : "Upload video (plays in-app)"}</Text>
+              </Pressable>
 
               <View style={styles.imageRow}>
                 <View style={styles.imageBoxDark}>
@@ -861,11 +1536,11 @@ function WorkoutsScreen({ session }) {
               </Pressable>
             </View>
           </View>
-        </SafeAreaView>
+        </View>
       </Modal>
 
       <Modal visible={playerOpen} animationType="slide">
-        <SafeAreaView style={styles.playerScreen}>
+        <View style={styles.playerScreen}>
           <View style={styles.playerHeader}>
             <Pressable style={styles.iconBtnDark} onPress={() => setPlayerOpen(false)}>
               <Ionicons name="close" size={18} color="#E2E8F0" />
@@ -875,34 +1550,92 @@ function WorkoutsScreen({ session }) {
           </View>
 
           {playerUrl ? (
-            <WebView source={{ uri: playerUrl }} style={{ flex: 1 }} javaScriptEnabled domStorageEnabled originWhitelist={["*"]} allowsFullscreenVideo />
+            playerType === "youtube" ? (
+              <WebView
+                source={{ uri: playerUrl }}
+                style={{ flex: 1 }}
+                javaScriptEnabled
+                domStorageEnabled
+                originWhitelist={["*"]}
+                allowsFullscreenVideo
+              />
+            ) : (
+              <View style={{ flex: 1, padding: 12 }}>
+                <Video
+                  source={{ uri: playerUrl }}
+                  style={{ flex: 1, borderRadius: 16, overflow: "hidden" }}
+                  useNativeControls
+                  resizeMode="contain"
+                  shouldPlay
+                />
+              </View>
+            )
           ) : (
-            <View style={styles.center}><Text>No video</Text></View>
+            <View style={styles.center}>
+              <Text>No video</Text>
+            </View>
           )}
-        </SafeAreaView>
+        </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
-function ProfileScreen({ session }) {
+/** =======================
+ *  Profile (FIXED NAV)
+ *  ======================= */
+function ProfileScreen({ session, navigation }) {
   const user = session.user;
+  const todayYMD = dateToYMD(new Date());
+
   const [loading, setLoading] = useState(true);
   const [fullName, setFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [points, setPoints] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [totalWorkouts, setTotalWorkouts] = useState(0);
+  const [completionsTotal, setCompletionsTotal] = useState(0);
+
+  const calcStreakFromCompletions = (rows) => {
+    if (!rows?.length) return 0;
+    const days = new Set(rows.map((r) => dayKey(r.completed_at)));
+    let s = 0;
+    let d = new Date();
+    d.setHours(0, 0, 0, 0);
+    while (days.has(d.toDateString())) {
+      s += 1;
+      d.setDate(d.getDate() - 1);
+    }
+    return s;
+  };
+
   const load = async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("profiles")
-      .select("full_name, avatar_url")
-      .eq("user_id", user.id)
-      .maybeSingle();
 
-    setFullName(data?.full_name || "");
-    setAvatarUrl(data?.avatar_url || null);
+    const { data: prof } = await supabase.from("profiles").select("full_name, avatar_url").eq("user_id", user.id).maybeSingle();
+    setFullName(prof?.full_name || "");
+    setAvatarUrl(prof?.avatar_url || null);
+
+    const { data: setg } = await supabase.from("user_settings").select("points").eq("user_id", user.id).maybeSingle();
+    const pts = Number.isFinite(setg?.points) ? setg.points : 0;
+    setPoints(pts);
+
+    const { data: w } = await supabase.from("workouts").select("id").eq("user_id", user.id);
+    setTotalWorkouts((w || []).length);
+
+    const { data: c } = await supabase
+      .from("workout_completions")
+      .select("id, completed_at")
+      .eq("user_id", user.id)
+      .order("completed_at", { ascending: false });
+
+    const comps = c || [];
+    setCompletionsTotal(comps.length);
+    setStreak(calcStreakFromCompletions(comps));
+
     setLoading(false);
   };
 
@@ -910,14 +1643,19 @@ function ProfileScreen({ session }) {
     load();
   }, []);
 
+  const xp = useMemo(() => xpFromPoints(points), [points]);
+
   const uploadAvatar = async () => {
-    const uri = await pickImageSquare();
-    if (!uri) return;
+    const asset = await pickImageSquare();
+    if (!asset?.uri) return;
 
     try {
       setUploading(true);
 
-      const { publicUrl } = await uploadToBucket(BUCKET_AVATARS, uri, "avatar.jpg");
+      const ext = (asset.uri.split(".").pop() || "jpg").toLowerCase();
+      const contentType = asset?.mimeType || (ext === "png" ? "image/png" : ext === "heic" ? "image/heic" : "image/jpeg");
+
+      const { publicUrl } = await uploadToBucket(BUCKET_AVATARS, asset.uri, "avatar." + ext, contentType);
 
       const { error } = await supabase.from("profiles").upsert({
         user_id: user.id,
@@ -963,54 +1701,153 @@ function ProfileScreen({ session }) {
     await supabase.auth.signOut();
   };
 
+  // ✅ REAL NAV:
+  const openTodayTimeline = () => {
+    // Profile is a Tab screen; parent is Tab navigator.
+    // Navigate to Dashboard tab, then to DayDetails inside DashboardStack:
+    navigation.getParent()?.navigate("Dashboard", {
+      screen: "DayDetails",
+      params: { ymd: todayYMD },
+    });
+  };
+
+  const goToWorkouts = () => {
+    navigation.getParent()?.navigate("Workouts");
+  };
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.center}><ActivityIndicator /></SafeAreaView>
+      <View style={styles.center}>
+        <ActivityIndicator />
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <View style={styles.screen}>
       <LinearGradient colors={["#050816", "#0B1220", "#070A12"]} style={styles.bg} />
-      <View style={styles.page}>
-        <Text style={styles.hiDark}>Profile</Text>
-        <Text style={styles.smallDark} numberOfLines={1}>{user.email}</Text>
+      <NewYearDecor />
+      <ScrollView contentContainerStyle={{ paddingBottom: 110 }}>
+        <View style={styles.page}>
+          <View style={styles.topRow}>
+            <View>
+              <Text style={styles.hiDark}>Profile</Text>
+              <Text style={styles.smallDark} numberOfLines={1}>
+                {user.email}
+              </Text>
+            </View>
 
-        <View style={styles.profileCardDark}>
-          <View style={styles.avatarBig}>
-            {avatarUrl ? (
-              <Image source={{ uri: cacheBust(avatarUrl) }} style={styles.avatarBigImg} />
-            ) : (
-              <Ionicons name="person" size={28} color="#E2E8F0" />
-            )}
+            <Pressable style={styles.iconBtnDark} onPress={load}>
+              <Ionicons name="refresh-outline" size={18} color="#E2E8F0" />
+            </Pressable>
           </View>
 
-          <Pressable style={styles.neonBtn} onPress={uploadAvatar} disabled={uploading}>
-            <Ionicons name="image-outline" size={18} color="#0B1220" />
-            <Text style={styles.neonBtnText}>{uploading ? "Uploading..." : "Upload profile photo"}</Text>
-          </Pressable>
+          <View style={styles.profileHero}>
+            <View style={styles.profileHeroTop}>
+              <View style={styles.avatarBig}>
+                {avatarUrl ? <Image source={{ uri: cacheBust(avatarUrl) }} style={styles.avatarBigImg} /> : <Ionicons name="person" size={28} color="#E2E8F0" />}
+              </View>
 
-          <Pressable style={styles.toolBtnWide} onPress={openAvatar} disabled={!avatarUrl}>
-            <Ionicons name="open-outline" size={18} color="#0B1220" />
-            <Text style={styles.toolText}>Open photo</Text>
-          </Pressable>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.profileName}>{fullName || "Unnamed Athlete"}</Text>
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+                  <View style={styles.tag}>
+                    <Ionicons name="flash-outline" size={14} color="#0B1220" />
+                    <Text style={styles.tagText}>Level {xp.level}</Text>
+                  </View>
+                  <View style={styles.tag}>
+                    <Ionicons name="flame-outline" size={14} color="#0B1220" />
+                    <Text style={styles.tagText}>{streak}d streak</Text>
+                  </View>
+                  <View style={styles.tag}>
+                    <Ionicons name="trophy-outline" size={14} color="#0B1220" />
+                    <Text style={styles.tagText}>{points} pts</Text>
+                  </View>
+                </View>
+              </View>
+            </View>
 
-          <TextInput value={fullName} onChangeText={setFullName} placeholder="Full name" placeholderTextColor={PH} style={styles.inputDark} />
+            <View style={{ marginTop: 14 }}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.smallDark}>XP Progress</Text>
+                <Text style={styles.smallDark}>{xp.inLevel}/100</Text>
+              </View>
+              <ProgressBar pct={xp.pct} />
+            </View>
 
-          <Pressable style={[styles.primaryBtn, saving && { opacity: 0.7 }]} onPress={save} disabled={saving}>
-            <Text style={styles.primaryBtnText}>{saving ? "Saving..." : "Save profile"}</Text>
-            <Ionicons name="save-outline" size={16} color="#0B1220" />
-          </Pressable>
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+             <Chip
+  icon="calendar-outline"
+  label="Open Today timeline"
+  onPress={() =>
+    navigation.navigate("Dashboard", {
+      screen: "DayDetails",
+      params: { ymd: todayYMD },
+    })
+  }
+/>
 
-          <Pressable style={styles.logoutBtn} onPress={logout}>
-            <Text style={styles.logoutText}>Logout</Text>
-          </Pressable>
+<Chip
+  icon="barbell-outline"
+  label="Go to workouts"
+  subtle
+  onPress={() => navigation.navigate("Workouts")}
+/>
+            </View>
+          </View>
+
+          <View style={styles.profileCardDark}>
+            <Text style={styles.sectionTitle}>Edit</Text>
+
+            <Pressable style={styles.neonBtn} onPress={uploadAvatar} disabled={uploading}>
+              <Ionicons name="image-outline" size={18} color="#0B1220" />
+              <Text style={styles.neonBtnText}>{uploading ? "Uploading..." : "Upload profile photo"}</Text>
+            </Pressable>
+
+            <Pressable style={styles.toolBtnWide} onPress={openAvatar} disabled={!avatarUrl}>
+              <Ionicons name="open-outline" size={18} color="#0B1220" />
+              <Text style={styles.toolText}>Open photo</Text>
+            </Pressable>
+
+            <TextInput value={fullName} onChangeText={setFullName} placeholder="Full name" placeholderTextColor={PH} style={styles.inputDark} />
+
+            <Pressable style={[styles.primaryBtn, saving && { opacity: 0.7 }]} onPress={save} disabled={saving}>
+              <Text style={styles.primaryBtnText}>{saving ? "Saving..." : "Save profile"}</Text>
+              <Ionicons name="save-outline" size={16} color="#0B1220" />
+            </Pressable>
+
+            <View style={styles.profileStatsGrid}>
+              <View style={styles.profileStat}>
+                <Text style={styles.profileStatLabel}>Workouts</Text>
+                <Text style={styles.profileStatValue}>{totalWorkouts}</Text>
+              </View>
+              <View style={styles.profileStat}>
+                <Text style={styles.profileStatLabel}>Completions</Text>
+                <Text style={styles.profileStatValue}>{completionsTotal}</Text>
+              </View>
+              <View style={styles.profileStat}>
+                <Text style={styles.profileStatLabel}>Streak</Text>
+                <Text style={styles.profileStatValue}>{streak}d</Text>
+              </View>
+              <View style={styles.profileStat}>
+                <Text style={styles.profileStatLabel}>Points</Text>
+                <Text style={styles.profileStatValue}>{points}</Text>
+              </View>
+            </View>
+
+            <Pressable style={styles.logoutBtn} onPress={logout}>
+              <Text style={styles.logoutText}>Logout</Text>
+            </Pressable>
+          </View>
         </View>
-      </View>
-    </SafeAreaView>
+      </ScrollView>
+    </View>
   );
 }
 
+/** =======================
+ *  Styles
+ *  ======================= */
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   screen: { flex: 1, backgroundColor: "#050816" },
@@ -1066,12 +1903,20 @@ const styles = StyleSheet.create({
   iconBtnDark: { width: 44, height: 44, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "rgba(148,163,184,0.16)" },
 
   heroPanelDark: { backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 22, padding: 16, borderWidth: 1, borderColor: "rgba(148,163,184,0.16)", marginBottom: 14 },
-  heroTitleDark: { fontSize: 13, fontWeight: "900", color: "#94A3B8" },
+  heroTitleDark: { fontSize: 12, fontWeight: "900", color: "rgba(226,232,240,0.75)", letterSpacing: 1.2 },
   heroQuoteDark: { marginTop: 8, fontSize: 18, fontWeight: "900", color: "#E2E8F0" },
   heroActions: { flexDirection: "row", gap: 10, marginTop: 12 },
 
   neonChip: { flex: 1, backgroundColor: "rgba(34,211,238,0.92)", paddingVertical: 10, borderRadius: 16, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   neonChipText: { fontWeight: "900", color: "#0B1220" },
+
+  badgePill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(34,211,238,0.92)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  badgeText: { color: "#0B1220", fontWeight: "900", fontSize: 12 },
+
+  todayCard: { marginTop: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(148,163,184,0.14)", borderRadius: 18, padding: 12 },
+  todayIcon: { width: 34, height: 34, borderRadius: 14, backgroundColor: "rgba(236,72,153,0.92)", alignItems: "center", justifyContent: "center" },
+  todayTitle: { fontWeight: "900", color: "#E2E8F0" },
+  todaySub: { marginTop: 2, color: "#94A3B8", fontWeight: "800", fontSize: 12 },
 
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   statBoxDark: { width: "47.5%", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 20, padding: 14, borderWidth: 1, borderColor: "rgba(148,163,184,0.16)" },
@@ -1124,7 +1969,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 16, fontWeight: "900", color: "#E2E8F0", marginBottom: 10 },
 
   rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 },
-  miniHelp: { fontSize: 11, color: "rgba(226,232,240,0.6)", fontWeight: "800", marginTop: 4 },
+  miniHelp: { fontSize: 11, color: "rgba(226,232,240,0.6)", fontWeight: "800", marginTop: 6 },
 
   togglePill: { width: 72, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   toggleOn: { backgroundColor: "rgba(34,211,238,0.92)" },
@@ -1139,4 +1984,53 @@ const styles = StyleSheet.create({
 
   toolBtnWide: { marginBottom: 10, height: 44, borderRadius: 16, backgroundColor: "rgba(34,211,238,0.92)", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   toolText: { fontWeight: "900", color: "#0B1220" },
+
+  modalOverlay: { flex: 1, backgroundColor: "rgba(2,6,23,0.72)", justifyContent: "center", padding: 16 },
+  modalCard: { backgroundColor: "rgba(255,255,255,0.92)", borderRadius: 20, padding: 14, borderWidth: 1, borderColor: "rgba(15,23,42,0.10)" },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  modalTitle: { fontWeight: "900", color: "#0B1220", fontSize: 16 },
+  modalClose: { width: 38, height: 38, borderRadius: 14, backgroundColor: "rgba(15,23,42,0.06)", alignItems: "center", justifyContent: "center" },
+  modalText: { color: "#0B1220", opacity: 0.75, fontWeight: "800", marginBottom: 10 },
+
+  nyOrb1: { position: "absolute", width: 220, height: 220, borderRadius: 999, top: -60, left: -70, backgroundColor: "rgba(236,72,153,0.14)", transform: [{ rotate: "18deg" }] },
+  nyOrb2: { position: "absolute", width: 260, height: 260, borderRadius: 999, bottom: 140, right: -90, backgroundColor: "rgba(34,211,238,0.12)", transform: [{ rotate: "-12deg" }] },
+  nyOrb3: { position: "absolute", width: 140, height: 140, borderRadius: 999, bottom: 40, left: 20, backgroundColor: "rgba(226,232,240,0.06)" },
+  nySparkRow: { position: "absolute", top: 14, right: 14, flexDirection: "row", gap: 10, opacity: 0.9 },
+
+  pbOuter: { height: 10, borderRadius: 999, backgroundColor: "rgba(226,232,240,0.10)", overflow: "hidden", borderWidth: 1, borderColor: "rgba(148,163,184,0.14)" },
+  pbInner: { height: "100%", borderRadius: 999, backgroundColor: "rgba(34,211,238,0.92)" },
+
+  chip: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(34,211,238,0.92)", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 16, flex: 1 },
+  chipSubtle: { backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(148,163,184,0.16)" },
+  chipText: { fontWeight: "900", color: "#0B1220", flex: 1 },
+
+  dayChip: { width: 92, borderRadius: 18, padding: 10, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(148,163,184,0.14)", alignItems: "center" },
+  dayChipToday: { backgroundColor: "rgba(34,211,238,0.92)", borderColor: "rgba(34,211,238,0.92)" },
+  dayChipDone: { borderColor: "rgba(236,72,153,0.35)" },
+  dayChipDow: { fontSize: 11, color: "#94A3B8", fontWeight: "900" },
+  dayChipLabel: { marginTop: 4, fontSize: 13, color: "#E2E8F0", fontWeight: "900" },
+  dayChipCount: { marginTop: 8, minWidth: 36, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  dayChipCountOn: { backgroundColor: "rgba(236,72,153,0.92)" },
+  dayChipCountOff: { backgroundColor: "rgba(226,232,240,0.08)", borderWidth: 1, borderColor: "rgba(148,163,184,0.14)" },
+  dayChipCountText: { fontWeight: "900", color: "#0B1220" },
+
+  dayHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
+  dayRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderTopWidth: 1, borderTopColor: "rgba(148,163,184,0.12)" },
+  dayRowLeft: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
+  dayDot: { width: 10, height: 10, borderRadius: 999, backgroundColor: "rgba(34,211,238,0.92)" },
+  dayTitle: { fontWeight: "900", color: "#E2E8F0" },
+  daySub: { marginTop: 2, fontWeight: "800", color: "#94A3B8", fontSize: 12 },
+  dayOpenBtn: { backgroundColor: "rgba(34,211,238,0.92)", borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 },
+  dayOpenText: { fontWeight: "900", color: "#0B1220" },
+
+  profileHero: { backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 22, padding: 16, borderWidth: 1, borderColor: "rgba(148,163,184,0.16)" },
+  profileHeroTop: { flexDirection: "row", alignItems: "center", gap: 14 },
+  profileName: { fontSize: 18, fontWeight: "900", color: "#E2E8F0" },
+  tag: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(34,211,238,0.92)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  tagText: { color: "#0B1220", fontWeight: "900", fontSize: 12 },
+
+  profileStatsGrid: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  profileStat: { width: "47.5%", backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(148,163,184,0.14)", borderRadius: 18, padding: 12 },
+  profileStatLabel: { color: "#94A3B8", fontWeight: "900", fontSize: 12 },
+  profileStatValue: { marginTop: 8, color: "#E2E8F0", fontWeight: "900", fontSize: 18 },
 });
